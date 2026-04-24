@@ -1,0 +1,322 @@
+---
+title: GraphQL 基础实践 nodejs & Java
+desc: >-
+  GraphQL 是由facebook提出的，一种协助前后台之间交流的语言。比起传统的REST api，他主要解决 overfetching 和
+  underfetching 两种问题。
+image: graphql.png
+tags:
+  - GraphQL
+  - nodejs
+  - Java
+time: '2021-07-28'
+refers:
+  - url: 'https://graphql.cn/'
+    title: GraphQL
+---
+GraphQL 是由 facebook 提出的，一种协助前后台之间交流的语言。比起传统的 REST api，他主要解决 overfetching 和 underfetching 两种问题。
+
+overfetching 简单来说指的是我调用一次接口，返回了 10 个字段给我，而我可能只需要其中 5 个字段。
+
+这种情况是我个人最常经历的，当你的应用对接的后台是个很公共的服务，他又对接太多租户时，他可能在一个接口上把所有字段都吐给你，而其中 3 个字段是租户 A 才要的，3 个字段是租户 B 要的，最后才是你要的。导致报文又长又浪费，尤其是在做小程序时，一切都要精简轻量最好。
+
+underfetching 则是指的我需要的信息，可能需要调用接口 A，拿到某个 ID，再调用接口 B，最后才能整合成我需要的信息。说白了就是需要多次请求调用。
+
+想要推动这些后台去优化他们的 API 难比登天，那么假如我能在中间搭建一个服务，请求接口后包装成 GraphQL api，前端统一都用 graphql 请求的话，是否会让一切方便许多？
+
+下面将会展示如何在 nodeJs 下搭建一个 GraphQL Server：
+
+首先是我的目录结构：
+
+![](/images/graphql/graphql1.png)
+
+1\. [Apollo Server](https://www.apollographql.com/docs/apollo-server/) :
+
+我选择的服务端框架是 ApolloGraphQL，他提供完整的 Server 和 Client 两个端的框架，用起来体验还是很不错的。
+
+2\. 关于目录结构，我是参考链接：[https://github.com/betaflag/graphql-server-scaffolding](https://github.com/betaflag/graphql-server-scaffolding)
+
+里面有三种关于不同目录结构的分析，我个人认为这种目录结构已经把 GraphQL 的概念分的很清楚了
+
+3\. Data, resolver, typeDefs:
+
+以上基本概念可以看官网，或者看这个视频也讲的很清楚 =》[https://www.youtube.com/watch?v=lKlXdmG0aKQ](https://www.youtube.com/watch?v=lKlXdmG0aKQ)
+
+后面展开讲实际开发：
+
+1\. 类型的定义：例如这是一个实际的 REST API 接口报文：
+
+我们首先需要在 typeDefs 下写以上接口报文里的那些类型定义：
+
+\*typeDefs/types/agreement.js
+
+```js
+const { gql } = require("apollo-server");
+
+const agreement = gql`
+  type AgreementResult {
+    scenarioType: String
+
+    versionType: String
+
+    tenantId: String
+
+    tenantName: String
+
+    versionDescription: String
+
+    lastVersion: String
+
+    agreementBody: String
+
+    personalizedSigning: String
+
+    displayStatus: String
+
+    status: String
+
+    agreementName: String
+  }
+
+  type Agreement {
+    status: String
+
+    code: String
+
+    message: String
+
+    result: [AgreementResult]
+  }
+`;
+
+module.exports = {
+  agreement
+};
+```
+
+这里用到的定义语法叫[SDL(schema definition language)](https://www.apollographql.com/docs/apollo-server/schema/schema/)
+
+2\. dataSource
+
+再来就是数据的来源了；网上的视频，包括我在上面附的那个链接，大部分都是静态资源的 datasource。而在实际应用中，例如我自己的场景，我需要的数据是从 rest api 获取的，而 apollo 也有提供对应的库 - 'apollo-datasource-rest'；
+
+（实际上，apollo 还提供很多种数据源依赖库，可以看这个链接：[https://www.apollographql.com/docs/apollo-server/data/data-sources/](https://www.apollographql.com/docs/apollo-server/data/data-sources/)）
+
+\*data/agreement.js
+
+```js
+const { RESTDataSource } = require("apollo-datasource-rest");
+
+class ScrmApi extends RESTDataSource {
+  constructor() {
+    super();
+
+    this.baseURL = "https://weblink01-ts.huawei.com/";
+  }
+
+  async getAgreement() {
+    return this.get(
+      "/uat/scrm_customer/cui/agreement/newest/v2?appSource=HLife"
+    );
+  }
+}
+
+module.exports = { ScrmApi };
+```
+
+一个简单的 GET 请求。
+
+使用这个 dataSource，需要去入口文件的 ApolloServer 中注册：
+
+```js
+const { ApolloServer } = require("apollo-server");
+
+const { RandomUser, ScrmApi } = require("./data");
+
+const { typeDefs } = require("./typeDefs");
+
+const { resolvers } = require("./resolvers");
+
+//nodejs version under 11 might need this import
+
+require("core-js/stable");
+
+const server = new ApolloServer({
+  typeDefs,
+
+  resolvers,
+
+  dataSources: () => ({
+    RandomUser: new RandomUser(),
+
+    scrmApi: new ScrmApi()
+  })
+});
+
+server.listen().then(({ url }) => {
+  console.log(`🚀 Server ready at ${url}`);
+});
+```
+
+3\. resolver：最后只需要在 resolver 中添加就行了
+
+\*resolvers/index.js
+
+```js
+const resolvers = {
+  Query: {
+    getUser: async (_, { gender }, { dataSources }) =>
+      dataSources.RandomUser.getUser(gender),
+
+    getUsers: async (_, { people, gender }, { dataSources }) =>
+      dataSources.RandomUser.getUsers(people, gender),
+
+    agreements: async (_, __, { dataSources }) => {
+      return dataSources.scrmApi.getAgreement();
+    }
+  }
+};
+
+module.exports = {
+  resolvers
+};
+```
+
+总新增一个 graphQL 查询就完成了，可以用 npm run start 直接运行，会出现一个 graphql-playground 的页面供你测试你的 API：
+
+（此页面是基于 apollo-server 自带的一个 sandbox 项目运行的，可能会被公司网屏蔽导致页面加载不出来，可以用 cntlm 转发或者开透明代理）
+
+最终页面：
+
+![](/images/graphql/graphql2.png)
+
+可以看到现在我们可以根据自己需要，跟后台获取自己要的字段，过滤掉不需要的字段了。而且在写 query 时还会自动提示你的接口字段。
+
+到此，一个基于 nodeJs 的基本 GraphQL server 就搭建起来了。部署的话，官方有提供很多解决方案，例如 express，不过申请资源太麻烦了，我个人没有试过。感兴趣的可以试一下。
+
+考虑到部署，我个人还是觉得 java 会更成熟一点，因此也基于 java 的搭建了一版：
+
+GraphQL 支持很多语言也是他很好的一个优点。
+
+Java 版：[https://www.graphql-java.com/tutorials/getting-started-with-spring-boot/](https://www.graphql-java.com/tutorials/getting-started-with-spring-boot/)
+
+我基本上是照着原指导操作的，因此这里就不再赘述了，感兴趣的可以自己试一下。
+
+不过基于这种方式搭建的服务，需要另外有个测试 API 的页面，也就是文档里最后说的 [GraphQL Playground](http://https://github.com/graphql/graphql-playground)。github 链接里有很多版本，我最后是用最简单的 html 直接运行的。不过需要解决下 CORS 请求问题就是了，详细的可以看我的 github 源码 - [java 版 GraphQL Server](https://github.com/l00437994/graphql-java-project)。
+
+以上都是关于搭建 Server，那么关于 Client 侧的使用：这里我只举 Vue 项目和微信小程序
+
+1. [Vue Apollo](https://apollo.vuejs.org/guide/)
+
+使用：
+
+![](/images/graphQL/graphql3.png)
+
+这里要注意的是，一定要用 object 把 apollo 下的对象包起来：
+
+```js
+apollo: {
+
+    //this won't work
+
+    agreements: gql`
+
+    query {
+
+          agreements {
+
+            agreementBody
+
+            agreementName
+
+          }
+
+        }
+
+    `,
+
+    //wrap it in object
+
+    agreements: {
+
+      query: gql`
+
+        query {
+
+          agreements {
+
+            agreementBody
+
+            agreementName
+
+          }
+
+        }
+
+      `
+
+    }
+
+  }
+```
+
+2. 微信小程序：
+
+由于我的出发点实际上是想应用在微信小程序，发现直接在微信小程序上用 vue-apollo 是会报错的。
+
+不过微信有一套自己维护的 graphql 框架：‘wxapp-graphql’
+
+使用：
+
+```js
+let gql = require('wxapp-graphql');
+
+const GraphQL = gql.GraphQL;
+
+
+
+gql = GraphQL({
+
+    url: 'http://localhost:8080/graphql'
+
+}, true);
+
+
+
+export default gql;
+```
+
+在你需要的地方 import gql from './上面这段代码.js'
+
+通过 query 之后的回调来访问最后的结果：
+
+```js
+gql.query({
+
+                query: `query {
+
+                            agreements {
+
+                                agreementBody
+
+                                agreementName
+
+                                status
+
+                                }
+
+                        }`
+
+            }).then(res => {
+
+                console.log('query result: ', res);
+
+            });
+```
+
+最后是几个有用的资料：
+
+1\. vscode 开发插件： GraphQL; Idea 开发插件：js-graphql
+
+2\. typerscript-boilderplate: https://github.com/graphql-boilerplates/typescript-graphql-server
+
+3\. wxapp-graphql: https://github.com/Authing/wxapp-graphql
