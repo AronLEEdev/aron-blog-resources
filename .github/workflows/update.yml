@@ -1,0 +1,55 @@
+name: Update search index
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate search-index.json
+        run: |
+          python3 << 'EOF'
+          import os, json, re, yaml
+
+          results = []
+          for fname in sorted(os.listdir("blogs")):
+              if not fname.endswith(".mdx"):
+                  continue
+              slug = fname[:-4]
+              content = open(f"blogs/{fname}", encoding="utf-8").read()
+              m = re.match(r"^---\n(.*?)\n---\n?(.*)", content, re.DOTALL)
+              if not m:
+                  continue
+              data = yaml.safe_load(m.group(1)) or {}
+              body = re.sub(r'[#`\[\]]', '', m.group(2))
+              results.append({
+                  "slug": slug,
+                  "title": data.get("title", ""),
+                  "description": data.get("desc", ""),
+                  "image": data.get("image", ""),
+                  "tags": data.get("tags", []),
+                  "time": str(data.get("time", "")),
+                  "refers": data.get("refers"),
+                  "body": body.strip(),
+              })
+
+          results.sort(key=lambda x: x.get("time", ""), reverse=True)
+          with open("search-index.json", "w", encoding="utf-8") as f:
+              json.dump(results, f, ensure_ascii=False, indent=2)
+          print(f"Generated {len(results)} entries")
+          EOF
+
+      - name: Commit search-index.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add search-index.json
+          git diff --staged --quiet && echo "No changes" || git commit -m "chore: update search-index.json [skip ci]"
+          git push
