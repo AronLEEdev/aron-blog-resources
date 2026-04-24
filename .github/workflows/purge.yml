@@ -1,0 +1,29 @@
+name: Purge jsDelivr cache
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Purge changed files on jsDelivr
+        run: |
+          paths=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            paths="${paths}\"/gh/${{ github.repository }}@main/${f}\","
+          done < <(find blogs images -type f 2>/dev/null)
+          paths="${paths%,}"
+          if [ -z "$paths" ]; then
+            echo "Nothing to purge"
+            exit 0
+          fi
+          echo "Purging $(echo "$paths" | tr ',' '\n' | wc -l) files…"
+          curl -sS -X POST https://purge.jsdelivr.net/ \
+            -H 'content-type: application/json' \
+            -d "{\"path\":[${paths}]}"
+          echo
